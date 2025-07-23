@@ -2,144 +2,71 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"image/color"
 	"log"
-	"math/rand"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ridhamu/snakey/common"
+	"github.com/ridhamu/snakey/entity"
+	"github.com/ridhamu/snakey/game"
+	"github.com/ridhamu/snakey/math"
 )
 
-type Point struct {
-	x, y int
-}
-
 type Game struct {
-	Snake      []Point
-	Direction  Point
+	world      *game.World
 	Lastupdate time.Time
-	Food       Point
 	Gameover   bool
 }
 
 var (
-	dirUp           = Point{x: 0, y: -1}
-	dirDown         = Point{x: 0, y: 1}
-	dirRight        = Point{x: 1, y: 0}
-	dirLeft         = Point{x: -1, y: 0}
 	mplusFaceSource *text.GoTextFaceSource
 )
-
-const (
-	speed        = time.Second / 6
-	screenWidth  = 640
-	screenHeight = 480
-	gridSize     = 20
-)
-
-func (g Game) isBadCollision(newHead Point, snake *[]Point) bool {
-	if newHead.x < 0 || newHead.y < 0 || newHead.x >= screenWidth/gridSize || newHead.y >= screenHeight/gridSize {
-		return true
-	}
-
-	for _, bodySnake := range *snake {
-		if bodySnake == newHead {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (g *Game) UpdateSnake(snake *[]Point, direction *Point) {
-	// get the current head
-	head := (*snake)[0]
-
-	// create the new head by adding the direction to the current head
-	newHead := Point{
-		x: head.x + direction.x,
-		y: head.y + direction.y,
-	}
-
-	// check for bad collion e.g snake itself or out of bound
-	if g.isBadCollision(newHead, &g.Snake) {
-		g.Gameover = true
-		return
-	}
-
-	// collision detection with the Food
-	if newHead == g.Food {
-		g.SpanwFood()
-		*snake = append(
-			[]Point{newHead},
-			*snake...,
-		)
-	} else {
-		// update the snake
-		*snake = append(
-			[]Point{newHead},
-			(*snake)[:len(*snake)-1]...,
-		)
-	}
-}
-
-func (g *Game) SpanwFood() {
-	g.Food = Point{
-		x: rand.Intn(screenWidth / gridSize),
-		y: rand.Intn(screenHeight / gridSize),
-	}
-}
 
 func (g *Game) Update() error {
 	if g.Gameover {
 		return nil
 	}
 
-	if ebiten.IsKeyPressed(ebiten.KeyW) {
-		g.Direction = dirUp
-	} else if ebiten.IsKeyPressed(ebiten.KeyA) {
-		g.Direction = dirLeft
-	} else if ebiten.IsKeyPressed(ebiten.KeyS) {
-		g.Direction = dirDown
-	} else if ebiten.IsKeyPressed(ebiten.KeyD) {
-		g.Direction = dirRight
+	playerRaw, ok := g.world.GetFirstEntity("player")
+	if !ok {
+		return errors.New("entity player was not found")
 	}
 
-	if time.Since(g.Lastupdate) < speed {
+	player := playerRaw.(*entity.Player)
+
+	if ebiten.IsKeyPressed(ebiten.KeyW) {
+		player.SetDirection(math.DirUp)
+	} else if ebiten.IsKeyPressed(ebiten.KeyA) {
+		player.SetDirection(math.DirLeft)
+	} else if ebiten.IsKeyPressed(ebiten.KeyS) {
+		player.SetDirection(math.DirDown)
+	} else if ebiten.IsKeyPressed(ebiten.KeyD) {
+		player.SetDirection(math.DirRight)
+	}
+
+	if time.Since(g.Lastupdate) < common.Speed {
 		return nil
 	}
 	g.Lastupdate = time.Now()
 
-	g.UpdateSnake(&g.Snake, &g.Direction)
+	for _, entity := range g.world.Entities() {
+		if entity.Update(g.world) {
+			g.Gameover = true
+			return nil
+		}
+	}
+
 	return nil
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	for _, p := range g.Snake {
-		vector.DrawFilledRect(
-			screen,
-			float32(p.x*gridSize),
-			float32(p.y*gridSize),
-			gridSize,
-			gridSize,
-			color.White,
-			true,
-		)
+	for _, entity := range g.world.Entities() {
+		entity.Draw(screen)
 	}
-
-	// drawing food here
-	vector.DrawFilledRect(
-		screen,
-		float32(g.Food.x*gridSize),
-		float32(g.Food.y*gridSize),
-		gridSize,
-		gridSize,
-		color.RGBA{255, 0, 0, 255},
-		true,
-	)
 
 	// draw the game over text
 	if g.Gameover {
@@ -157,8 +84,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 		op := &text.DrawOptions{}
 		op.GeoM.Translate(
-			screenWidth/2-w/2,
-			screenHeight/2-h/2,
+			common.ScreenWidth/2-w/2,
+			common.ScreenHeight/2-h/2,
 		)
 
 		op.ColorScale.ScaleWithColor(color.White)
@@ -174,7 +101,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return screenWidth, screenHeight
+	return common.ScreenWidth, common.ScreenHeight
 }
 
 func main() {
@@ -190,21 +117,21 @@ func main() {
 
 	mplusFaceSource = t
 
+	world := game.NewWorld()
+	world.AddEntity(
+		entity.NewPlayer(math.Point{
+			X: common.ScreenWidth / common.GridSize / 2,
+			Y: common.ScreenHeight / common.GridSize / 2,
+		}, math.DirRight),
+	)
+
+	world.AddEntity(entity.NewFood())
+
 	g := &Game{
-		Snake: []Point{
-			{
-				x: screenWidth / gridSize / 2,
-				y: screenHeight / gridSize / 2,
-			}},
-		Direction: Point{
-			x: 1,
-			y: 0,
-		},
+		world: world,
 	}
 
-	g.SpanwFood()
-
-	ebiten.SetWindowSize(screenWidth, screenHeight)
+	ebiten.SetWindowSize(common.ScreenWidth, common.ScreenHeight)
 	ebiten.SetWindowTitle("Snakey")
 
 	if err := ebiten.RunGame(g); err != nil {
